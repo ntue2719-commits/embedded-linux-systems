@@ -1,0 +1,32 @@
+# Build directories
+**/build/
+
+# Linux kernel source/build
+linux-*/
+
+# Kernel module build artifacts
+*.o
+*.cmd
+*.mod
+*.mod.c
+*.symvers
+modules.order
+
+# Generated filesystem images
+*.cpio
+*.cpio.gz
+*.img
+*.jffs2
+
+# Archives
+*.tar
+*.tar.gz
+*.tar.xz
+
+# Editor
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+.DS_Store
