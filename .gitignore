@@ -1,3 +1,7 @@
+# ==========================================
+# Embedded Linux Systems - Git Ignore
+# ==========================================
+
 # Build directories
 **/build/
 
@@ -6,11 +10,14 @@ linux-*/
 
 # Kernel module build artifacts
 *.o
+*.ko
 *.cmd
 *.mod
 *.mod.c
+*.mod.o
 *.symvers
 modules.order
+.tmp_versions/
 
 # Generated filesystem images
 *.cpio
@@ -18,10 +25,25 @@ modules.order
 *.img
 *.jffs2
 
+# Kernel and bootloader binaries
+zImage
+vmlinux
+u-boot
+
 # Archives
 *.tar
 *.tar.gz
 *.tar.xz
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Temporary files
+*.swp
+*.swo
+*~
 
 # Editor
 .vscode/
