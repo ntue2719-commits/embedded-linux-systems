@@ -65,7 +65,7 @@ The development workspace and Git repository are **separate**. Implement and tes
 | Lab | Topic | Status |
 |---|---|---|
 | LAB-01 | Linux Kernel Configuration and Boot | **QEMU direct boot verified** |
-| LAB-02 | Device Driver and File System Management | **Character-driver baseline verified**; other course components remain |
+| LAB-02 | Device Driver and File System Management | **COMPLETED — Parts A–D PASS** |
 | Lab 21–28 | Character Driver Extension Exercises | **8/8 functional exercise tests PASS** |
 | Lab 29–40 | Advanced Character Driver Exercises | Pending |
 
@@ -143,14 +143,21 @@ The verified character-driver baseline includes:
 - `/proc/lab2_info` via procfs
 - Device attributes exposed through sysfs
 
-Other LAB-02 coursework, including MTD/JFFS2 and additional BusyBox integration, is not marked complete here.
+**LAB-02 completed (Parts A–D):**
+
+- **Part A — Character device:** ARMv7 module built for kernel 6.1.90; `/dev/lab2` read/write tested.
+- **Part B — procfs/sysfs:** `/proc/lab2_info` and sysfs `buffer_len`, `open_count`, `last_data` verified in QEMU.
+- **Part C — MTD/JFFS2:** Host `nandsim` 32 MiB NAND identified (session device `/dev/mtd2`); 16 KiB JFFS2 image created, programmed, mounted, and tested. Runtime file and appended log content survived unmount/remount. **Never write to the laptop BIOS devices `/dev/mtd0` or `/dev/mtd1`.**
+- **Part D — BusyBox auto-load:** `rcS` loads `lab2_driver.ko` automatically; successful fresh QEMU boot, device/procfs/sysfs checks, and repeated read/write tests.
+
+These validations confirm the four main parts. The provided `test_procfs.sh` still needs an idempotent module-load check, and persistence was validated across unmount/remount rather than host reboot. See `labs/lab02/README.md` for details.
 
 ### Verified Character Driver Baseline
 
 | Property | Configuration |
 |---|---|
 | Module | `lab2_driver.ko` |
-| Device node | `/dev/lab2` (created using `mknod` in QEMU tests) |
+| Device node | `/dev/lab2` (created by `rcS` at boot) |
 | Major / Minor | `240 / 0` |
 | Buffer capacity | `1024` bytes |
 | procfs | `/proc/lab2_info` |
