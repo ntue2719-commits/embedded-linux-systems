@@ -1,223 +1,136 @@
-# LAB-02 — Linux Character Device Driver
+# LAB-02 — Linux Device Driver & File System Management
 
-## Overview
+**Status: COMPLETED — Parts A–D verified.**
 
-This lab builds on LAB-01's minimal Embedded Linux system. It implements a loadable Linux character device driver and exposes device data and statistics through `/dev`, `/proc`, and `/sys`.
+This lab builds an ARMv7 Linux character device driver, exposes kernel information through procfs/sysfs, tests JFFS2 on a simulated NAND device, and configures BusyBox init to load the driver automatically at boot.
 
-> **Current scope:** The character driver, procfs, and sysfs features have been built and tested on ARMv7 QEMU. The MTD/JFFS2 and BusyBox auto-load sections of the original LAB-02 handout are **not yet documented as completed**.
+## Development environment
 
-## Development Environment
-
-| Component | Configuration |
+| Component | Verified configuration |
 |---|---|
-| Host OS | Ubuntu 24.04.5 LTS (x86_64) |
-| Target CPU / architecture | ARM Cortex-A9 / ARMv7-A |
-| Emulator | QEMU `vexpress-a9` (QEMU 8.2.2) |
-| Target Linux kernel | 6.1.90 |
-| Cross compiler | `arm-linux-gnueabihf-gcc` 13.3.0 |
-| Root filesystem | BusyBox + initramfs from LAB-01 |
-| Build system | Linux Kbuild (external module) |
+| Host | Ubuntu (x86_64); MTD tests on host kernel `7.0.0-31-generic` |
+| Emulated target | QEMU `vexpress-a9`, ARM Cortex-A9 |
+| Target kernel | Linux `6.1.90` |
+| Cross compiler | `arm-linux-gnueabihf-` |
+| Root filesystem | BusyBox + initramfs |
+| Driver module | `lab2_driver.ko` (ARM EABI5, `vermagic: 6.1.90 SMP mod_unload ARMv7 p2v8`) |
 
-The host kernel and target kernel are different. Build the module for **ARMv7 / Linux 6.1.90** and load it **inside QEMU**, not on the x86_64 host.
+**Execution environments are distinct:** parts A, B and D run in ARM QEMU; part C uses the host Linux kernel's `nandsim` driver.
 
-## Repository Structure
+## Part A — Character device driver (PASS)
 
-```text
-labs/lab02/
-├── README.md
-└── driver/
-    ├── Makefile
-    └── lab2_driver.c
-```
+The module implements `open()`, `read()`, `write()` and `release()` via `file_operations`, uses `copy_to_user()` / `copy_from_user()` to exchange bytes with userspace, and protects shared state with a mutex.
 
-The optional follow-up exercise is maintained separately at:
+| Interface | Value |
+|---|---|
+| Character device | `/dev/lab2` |
+| Major/minor | `240:0` |
+| Shared buffer | `1024` bytes |
+| procfs | `/proc/lab2_info` |
+| sysfs | `/sys/class/lab2_class/lab2/` |
 
-```text
-assignments/driver-exercises/lab21_sysfs_device_name/
-```
+QEMU tests demonstrated successful reads/writes, including repeated messages `Message_1`, `Message_2`, and `Message_3`. The total successful device-open count increased from 0 to 10 during the recorded checks.
 
-## Driver Features
+## Part B — procfs and sysfs (PASS)
 
-- Character device: `/dev/lab2`
-- Fixed major/minor: **240:0** (ensure the major number is available)
-- Kernel buffer capacity: **1024 bytes**
-- `open()`, `read()`, `write()`, and `release()` via `file_operations`
-- Safe userspace transfers using `copy_to_user()` and `copy_from_user()`
-- Mutex protection for shared buffer state
-- procfs entry: `/proc/lab2_info`
-- Read-only sysfs attributes: `buffer_len`, `open_count`, and `last_data`
+The driver exposes operational statistics through `/proc/lab2_info` and read-only sysfs attributes `buffer_len`, `open_count`, and `last_data`. QEMU showed procfs statistics, including major 240, buffer size 1024, initial data length 0, and open count 0. The sysfs directory contained all three driver attributes.
 
-**Note:** `open_count` is cumulative: it counts successful opens of `/dev/lab2` since module insertion, not the number of currently active users. A shell redirection and a subsequent `cat /dev/lab2` each increment the counter.
+## Part C — MTD, NAND simulator, JFFS2 (PASS)
 
-### Data path
+### Simulated NAND configuration
 
-```text
-Userspace application
-    | open / read / write / close
-    v
-/dev/lab2 (character device, 240:0)
-    |
-    v
-VFS -> file_operations
-       | read  -> copy_to_user()   -> user buffer
-       | write -> copy_from_user() -> device_buffer
-       v
-Kernel buffer (1024 bytes)
-    |
-    +--> /proc/lab2_info         (statistics)
-    +--> /sys/class/lab2_class/lab2/ (attributes)
-```
+| Property | Verified result |
+|---|---|
+| Device during this session | `/dev/mtd2` |
+| Device name | `NAND simulator partition 0` |
+| Type | `nand` |
+| Size | `33,554,432` bytes (32 MiB) |
+| Erase block | `16,384` bytes (16 KiB) |
+| Page size | 512 bytes |
+| OOB | 16 bytes |
+| sysfs target | `/sys/devices/virtual/mtd/mtd2` |
 
-## Prerequisites
+**Hardware safety:** The host also exposes `/dev/mtd0` (`BIOS`) and `/dev/mtd1` (`BIOS1`) through its physical SPI flash controller. NEVER erase or write to these devices. MTD numbering is not stable; always re-identify the simulator before any destructive operation. The commands below describe the *verified session* and must not be blindly rerun against a future `mtd2`.
 
-LAB-01 artifacts must already exist:
+### Image creation
 
-```text
-~/embedded_lab1/output/zImage
-~/embedded_lab1/output/vexpress-v2p-ca9.dtb
-~/embedded_lab1/rootfs/initramfs/
-~/embedded_lab1/kernel/linux-6.1.90/
-```
-
-The Linux kernel must support modules, module unloading, procfs, and sysfs. The kernel source tree must be configured and prepared for building external modules.
-
-Required host tools: `make`, `arm-linux-gnueabihf-gcc`, `qemu-system-arm`, `cpio`, `gzip`, `modinfo`, and `file`.
-
-## 1. Build the ARM Kernel Module (Ubuntu Host)
-
-From the repository root:
+Three input files were created in `mtd/jffs2_data/`: `hello.txt`, `info.txt`, and `logs/boot.log`. The filesystem image was created with:
 
 ```bash
-cd labs/lab02/driver
-make clean
-make
-file lab2_driver.ko
-modinfo lab2_driver.ko | grep vermagic
+mkfs.jffs2 \
+  --root="$HOME/embedded_lab2/mtd/jffs2_data" \
+  --eraseblock=0x4000 \
+  --output="$HOME/embedded_lab2/mtd/rootfs.jffs2" \
+  --pad --no-cleanmarkers
 ```
 
-Expected architecture and kernel compatibility:
+The generated image was **16,384 bytes**. The verified simulator was erased (`flash_erase`) and programmed (`nandwrite`); the latter printed a warning about all-`0xff` blocks, but JFFS2 subsequently mounted and passed file read/write checks.
+
+### Mount and persistence test
+
+```bash
+sudo modprobe jffs2
+sudo mkdir -p /mnt/jffs2
+sudo mount -t jffs2 mtd2 /mnt/jffs2
+cat /mnt/jffs2/hello.txt
+cat /mnt/jffs2/info.txt
+```
+
+Observed file contents:
 
 ```text
-ELF 32-bit LSB relocatable, ARM, EABI5
-vermagic: 6.1.90 SMP mod_unload ARMv7 p2v8
+Hello from JFFS2!
+Embedded Linux Lab02
 ```
 
-The included Makefile references `$(HOME)/embedded_lab1/kernel/linux-6.1.90`. Adjust `KDIR` if your LAB-01 kernel source lives elsewhere.
+A runtime file and an additional log entry were written to the mounted filesystem:
 
-## 2. Deploy to an initramfs (Ubuntu Host)
-
-The following manual commands assume the repository is stored at `~/Github_embedded_system/embedded-linux-systems`. They create a **separate working rootfs** so the LAB-01 original is not modified.
-
-```bash
-cd ~/Github_embedded_system/embedded-linux-systems
-mkdir -p /tmp/lab02-rootfs /tmp/lab02-output
-sudo cp -a ~/embedded_lab1/rootfs/initramfs/. /tmp/lab02-rootfs/
-sudo mkdir -p /tmp/lab02-rootfs/lib/modules/6.1.90
-sudo cp labs/lab02/driver/lab2_driver.ko /tmp/lab02-rootfs/lib/modules/6.1.90/
+```text
+runtime.txt: JFFS2 persistence test - LAB02
+logs/boot.log appended: Runtime write test
 ```
 
-Special device nodes in `/dev` require elevated permissions when copying or repackaging the rootfs.
+After `sync`, `umount`, and mounting JFFS2 again, both changes were still present. **PASS: persistence across unmount/remount.** The RAM-backed simulator does **not** guarantee persistence across a host reboot or simulator unload.
 
-```bash
-cd /tmp/lab02-rootfs
-sudo find . -print0 | sudo cpio --null -o -H newc | gzip -9 > /tmp/lab02-output/initramfs_lab02.cpio.gz
+## Part D — BusyBox init and module auto-load (PASS)
+
+The initramfs contains:
+
+```text
+rootfs/initramfs/etc/inittab
+rootfs/initramfs/etc/init.d/rcS
+rootfs/initramfs/usr/bin/test_driver.sh
+rootfs/initramfs/usr/bin/test_procfs.sh
 ```
 
-Confirm that the module is in the archive:
+`inittab` runs `/etc/init.d/rcS` as a `sysinit` action. `rcS` mounts pseudo filesystems and inserts `/lib/modules/6.1.90/lab2_driver.ko`, then creates `/dev/lab2` (major 240, minor 0).
 
-```bash
-gzip -dc /tmp/lab02-output/initramfs_lab02.cpio.gz | cpio -it | grep lab2_driver.ko
-```
-
-## 3. Boot QEMU (Ubuntu Host)
+The QEMU target was booted using:
 
 ```bash
 qemu-system-arm \
-  -M vexpress-a9 \
-  -cpu cortex-a9 \
-  -m 512M \
-  -smp 2 \
-  -nographic \
-  -kernel ~/embedded_lab1/output/zImage \
-  -dtb ~/embedded_lab1/output/vexpress-v2p-ca9.dtb \
-  -initrd /tmp/lab02-output/initramfs_lab02.cpio.gz \
-  -append 'console=ttyAMA0,115200 rdinit=/sbin/init'
+  -M vexpress-a9 -cpu cortex-a9 -m 512M -smp 2 -nographic \
+  -kernel "$HOME/embedded_lab1/output/zImage" \
+  -dtb "$HOME/embedded_lab1/output/vexpress-v2p-ca9.dtb" \
+  -initrd "$HOME/embedded_lab2/output/initramfs_lab2.cpio.gz" \
+  -append "console=ttyAMA0,115200 rdinit=/sbin/init"
 ```
 
-At the BusyBox `askfirst` prompt, press **Enter** to open the shell (`/ #`).
+Immediately after boot, *without manual `insmod`*, `lsmod` showed `lab2_driver`, `/dev/lab2` existed with permissions `crw-rw-rw-` and major/minor `240,0`, and procfs/sysfs were available. Writing and reading `LAB02 AUTOLOAD TEST` succeeded. `test_driver.sh` detected an already-loaded module and successfully exercised repeated read/write operations.
 
-## 4. Load and Test the Driver (Inside QEMU)
+**Testing note:** The supplied `test_procfs.sh` invokes `insmod` unconditionally and should be updated to check `/proc/modules` before attempting a second load; its execution has not been recorded in the final boot log. Its printed `Test PASSED` line is not, by itself, an assertion-based test suite.
 
-Run these commands **inside the ARM QEMU guest**, not on the Ubuntu host:
+## Results
 
-```sh
-uname -r
-insmod /lib/modules/6.1.90/lab2_driver.ko
-lsmod
-dmesg | grep lab2
-```
-
-If the device node is absent, create it manually:
-
-```sh
-[ -c /dev/lab2 ] || mknod /dev/lab2 c 240 0
-ls -l /dev/lab2
-```
-
-Test character-device read/write:
-
-```sh
-echo 'Hello LAB02' > /dev/lab2
-cat /dev/lab2
-```
-
-Check procfs and sysfs:
-
-```sh
-cat /proc/lab2_info
-ls /sys/class/lab2_class/lab2/
-cat /sys/class/lab2_class/lab2/buffer_len
-cat /sys/class/lab2_class/lab2/open_count
-cat /sys/class/lab2_class/lab2/last_data
-```
-
-Because `echo` appends `\n`, `echo 'Hello LAB02'` writes 12 bytes. Use `printf` to avoid the newline.
-
-To unload the module after testing:
-
-```sh
-rmmod lab2_driver
-dmesg | tail -n 15
-```
-
-## Test Status
-
-| Item | Status | Evidence |
+| Section | Scope | Result |
 |---|---|---|
-| Build kernel module for ARMv7 | PASS | `make`, `file`, `modinfo` |
-| Boot Linux 6.1.90 on QEMU | PASS | `uname -a` in the guest |
-| Insert module | PASS | `insmod`, `lsmod` |
-| Character-device read/write | PASS | `echo > /dev/lab2`, `cat /dev/lab2` |
-| procfs statistics | PASS | `cat /proc/lab2_info` |
-| sysfs `device_name` (Lab 21 extension) | PASS | See separate Lab 21 source; read-only behavior verified |
-| MTD / JFFS2 | Not yet verified | Planned LAB-02 section |
-| BusyBox auto-load of driver | Not yet verified | Module currently inserted manually |
+| A | Character device and ARM module | PASS |
+| B | procfs/sysfs interfaces | PASS |
+| C | NAND simulation, JFFS2 read/write, remount persistence | PASS |
+| D | BusyBox startup, driver auto-load and basic device tests | PASS |
 
-The Lab 21 extension is **not part of this baseline source**. It is stored under `assignments/driver-exercises/lab21_sysfs_device_name/`.
+**Conclusion:** All four main LAB-02 sections were exercised successfully. The dedicated character-driver extension exercises (Lab 21–40) are maintained separately under `assignments/driver-exercises/`.
 
-## Common Issues
+## Git repository policy
 
-| Symptom | Check / resolution |
-|---|---|
-| `insmod` reports invalid module format | Check `uname -r` in QEMU and `modinfo ... | grep vermagic` on the host. |
-| `/dev/lab2` is missing | Create `mknod /dev/lab2 c 240 0` in QEMU. |
-| Host `cp -a` cannot create files in `/dev` | Copy the initramfs with `sudo cp -a`. |
-| `class_create` API error | This lab targets Linux **6.1.90**; APIs differ in later kernels. |
-| Major 240 is unavailable | Check `/proc/devices` and select a free major; update the device node accordingly. |
-| sysfs attributes are missing | Confirm `/sys` is mounted and inspect `dmesg` for initialization errors. |
-
-## Next Steps
-
-- Continue the independent Lab 22–40 driver extension exercises.
-- Complete MTD/JFFS2 and BusyBox module auto-loading in the original LAB-02 handout.
-- Add reproducible test logs and keep source, Makefiles, and documentation under version control; do not commit generated `.ko` files.
+Commit source, Makefile, init configuration, test scripts, and small reproducible test inputs. Exclude host/target kernel build products, `.ko` and `.o` files, copied BusyBox binaries, and full generated initramfs archives. Preserve executable permissions on shell scripts where needed.
